@@ -7,6 +7,24 @@ var helmet = require('helmet');
 var session = require('express-session');
 var passport = require('passport');
 
+// モデル関連
+var User = require('./models/user');
+var Schedule = require('./models/schedule');
+var Availability = require('./models/availability');
+var Candidate = require('./models/candidate');
+var Comment = require('./models/comment');
+User.sync().then(() => {//アソシエーション
+  Schedule.belongsTo(User, {foreignKey: 'createdBy'});
+  Schedule.sync();//
+  Comment.belongsTo(User, {foreignKey: 'user_id'});
+  Comment.sync();//
+  Availability.belongsTo(User, {foreignKey: 'user_id'});
+  Candidate.sync().then(() => {//
+    Availability.belongsTo(Candidate, {foreignKey: 'candidate_id'});
+    Availability.sync();
+  });
+});
+
 var GitHubStrategy = require('passport-github2').Strategy;
 var GITHUB_CLIENT_ID = 'b9617eb0fde224360349';
 var GITHUB_CLIENT_SECRET = '94d8fbddd760e3125b9cfab80009561b724156a7';
@@ -25,7 +43,13 @@ passport.use(new GitHubStrategy({
 },
   function (accessToken, refreshToken, profile, done) {
     process.nextTick(function () {
-      return done(null, profile);
+      // return done(null, profile);
+      User.upsert({//GitHub 認証が実行された際に呼び出される処理
+        user_id: profile.id,
+        username: profile.username
+      }).then(() => {
+        done(null, profile);
+      });
     });
   }
 ));
