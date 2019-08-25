@@ -19,7 +19,7 @@ block content
           each schedule in schedules
             tr
               td
-                a(href="/schedules/${schedule.schedule_id}") #{schedule.schedulename}
+                a(href=`/schedules/${schedule.schedule_id}`) #{schedule.schedulename}
               td #{schedule.updatedAt}
     else
       div
