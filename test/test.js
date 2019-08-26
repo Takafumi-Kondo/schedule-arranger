@@ -7,6 +7,7 @@ const User = require('../models/user');
 const Schedule = require('../models/schedule');
 const Candidate = require('../models/candidate');
 const Availability = require('../models/availability');
+const Comment = require('../models/comment');
 
 describe('/login', () => {
   before(() => {
@@ -123,23 +124,81 @@ describe('/schedules/:schedule_id/users/:user_id/candidates/:candidate_id', () =
     });
   });
 });
+//コメントが更新できるか
+describe('/schedules/:schedule_id/users/:user_id/comments', () => {
+  before(() => {
+    passportStub.install(app);
+    passportStub.login({ id: 0, username: 'testuser' });
+  });
+
+  after(() => {
+    passportStub.logout();
+    passportStub.uninstall(app);
+  });
+
+  it('コメントが更新できる', (done) => {
+    User.upsert({ user_id: 0, username: 'testuser' }).then(() => {
+      request(app)
+        .post('/schedules')
+        .send({ schedulename: 'テストコメント更新予定1', memo: 'テストコメント更新メモ1', candidates: 'テストコメント更新候補1' })
+        .end((err, res) => {
+          const createdSchedulePath = res.headers.location;
+          const scheduleId = createdSchedulePath.split('/schedules/')[1];
+          //更新がされることをテスト
+          const userId = 0;
+          request(app)
+            .post(`/schedules/${scheduleId}/users/${userId}/comments`)
+            .send({ comment: 'testcomment' })
+            .expect('{"status":"OK","comment":"testcomment"}')
+            .end((err, res) => {
+              Comment.findAll({
+                where: { schedule_id: scheduleId }
+              }).then((comments) => {
+                assert.equal(comments.length, 1);
+                assert.equal(comments[0].comment, 'testcomment');
+                deleteScheduleAggregate(scheduleId, done, err);
+              });
+            });
+        });
+    });
+  });
+});
 // Aggregate:集約, deleteScheduleAggregate特定の親のデータモデルが他のデータモデルを所有
 function deleteScheduleAggregate(scheduleId, done, err) {
+  const promiseCommentDestroy = Comment.findAll({//ここでコメントが削除された Promise オブジェクトを作成
+    where: { schedule_id: scheduleId }
+  }).then((comments) => {//comments.map((c) => { return c.destroy(); });});
+    return Promise.all(comments.map((c) => { return c.destroy(); }));
+  });
+//Promiseのthen関数をうまく利用するために書き換え上下
   Availability.findAll({//出欠全て取得からの削除
     where: { schedule_id: scheduleId }
   }).then((availabilities) => {
     const promises = availabilities.map((a) => { return a.destroy(); });//子から消していくことでデータベースの処理不都合を防止する
-    Promise.all(promises).then(() => {
-      Candidate.findAll({
-        where: { schedule_id: scheduleId }
-      }).then((candidates) => {
-        const promises = candidates.map((c) => { return c.destroy(); });//候補
-        Promise.all(promises).then(() => {
-          Schedule.findById(scheduleId).then((s) => { s.destroy(); });//親予定
-          if (err) return done(err);
-          done();
-        });
-      });
+    return Promise.all(promises);
+  }).then(() => {
+    return Candidate.findAll({//全ての候補が取得できたことの Promise オブジェクトを返し
+      where: { schedule_id: scheduleId }
     });
+  }).then((candidates) => {//ここで、全ての候補が削除され、かつ、全てのコメントが削除されたことを示す Promise オブジェクトを作成して return 句で返
+    const promises = candidates.map((c) => { return c.destroy(); });
+    promises.push(promiseCommentDestroy);
+    return Promise.all(promises);
+  }).then(() => {
+    Schedule.findById(scheduleId).then((s) => { s.destroy(); });
+    if(err) return done(err);
+    done();
   });
+    // Promise.all(promises).then(() => {
+    //   Candidate.findAll({
+    //     where: { schedule_id: scheduleId }
+    //   }).then((candidates) => {
+    //     const promises = candidates.map((c) => { return c.destroy(); });//候補
+    //     Promise.all(promises).then(() => {
+    //       Schedule.findById(scheduleId).then((s) => { s.destroy(); });//親予定
+    //       if (err) return done(err);
+    //       done();
+    //     });
+    //   });
+    // });
 }

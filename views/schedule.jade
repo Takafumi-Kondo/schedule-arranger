@@ -18,6 +18,22 @@ block content
           - var availabilityLabels = ['欠', '?', '出る'];//0:欠,1:?,2:出 で表示されるようになっている
           td
             if user.isSelf
-              button #{availabilityLabels[availability]}
+              button(
+                data-schedule-id=schedule.schedule_id
+                data-user-id=user.user_id
+                data-candidate-id=candidate.candidate_id
+                data-availability=availability).availability-toggle-button #{availabilityLabels[availability]}
             else
               p #{availabilityLabels[availability]}
+    tr
+      th コメント
+      each user in users
+        if user.isSelf
+          td
+            p#self-comment #{commentMap.get(user.user_id)}
+            button(
+              data-schedule-id=schedule.schedule_id
+              data-user-id=user.user_id)#self-comment-button 編集
+        else
+          td
+            p #{commentMap.get(user.user_id)}
