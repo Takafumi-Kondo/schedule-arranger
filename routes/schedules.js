@@ -23,15 +23,8 @@ router.post('/', authenticationEnsurer, (req, res, next) => {
     createdBy: req.user.id,
     updatedAt: updatedAt
   }).then((schedule) => {            //trim()前後の空白を削除、split()文字列を任意の箇所で区切って分割、  空だったら空文字にnull防止
-    const candidateNames = req.body.candidates.trim().split('\n').map((s) => s.trim()).filter((s) => s !== "");
-    const candidates = candidateNames.map((c) => { return {//mapの使い方
-      candidateName: c,
-      schedule_id: schedule.schedule_id
-    };});
-    Candidate.bulkCreate(candidates).then(() => {//配列を区切るとbulkCreateで複数登録できる
-      res.redirect('/schedules/' + schedule.schedule_id);
-    });
-  });
+    createCandidatesAndRedirect(parseCandidateNames(req), scheduleId, res);
+  });//編集と同じ処理なのでcreateCandidatesAndRedirect という関数で、候補の作成とリダイレクトを行うようにまとめた。
 });
 
 router.get('/:schedule_id', authenticationEnsurer, (req, res, next) => {
@@ -118,5 +111,129 @@ router.get('/:schedule_id', authenticationEnsurer, (req, res, next) => {
       });
     });
   });
+
+  router.get('/:schedule_id/edit', authenticationEnsurer, (req, res, next) => {
+    Schedule.findOne({
+      where: {
+        schedule_id: req.params.schedule_id
+      }
+    }).then((schedule) => {
+      if(isMine(req, schedule)) {// 作成者のみが編集フォームを開ける。isMine という関数を別途用意して、自身の予定であればその後の処理
+        Candidate.findAll({//実装で候補を取得し、テンプレート edit を描画
+          where: { schedule_id: schedule.schedule_id },
+          order: [['"candidate_id"', 'ASC']]
+        }).then((candidates) => {
+          res.render('edit', {
+            user: req.user,
+            schedule: schedule,
+            candidates: candidates
+          });
+        });
+      } else {//予定が自分が作ったものでなかったり、そもそも存在しなかったときに使われる
+        const err = new Error('指定された予定がない、または、予定する権限がありません。');
+        err.status = 404;
+        next(err);
+      }
+    });
+  });
+
+  function isMine(req, schedule) {//リクエストと予定のオブジェクトを受け取り、その予定が自分のものであるかの真偽値を返す
+    return schedule && parseInt(schedule.createdBy) === parseInt(req.user.id);
+  }
+
+  router.post('/:schedule_id', authenticationEnsurer, (req, res, next) => {
+    if (parseInt(req.query.edit) === 1) {
+      Schedule.findOne({//edit=1 のクエリがあるときのみ
+        where: { schedule_id: req.params.schedule_id }
+    }).then((schedule) => {
+      if(isMine(req, schedule)) {//リクエストの送信者が作成者であるかをチェックし
+        const updatedAt = new Date();
+        schedule.update({
+          schedule_id: schedule.schedule_id,
+          schedulename: req.body.schedulename.slice(0, 255),
+          memo: req.body.memo,
+          createdBy: req.user.id,
+          updatedAt: updatedAt
+        }).then((schedule) => {
+          Candidate.findAll({
+            where: { schedule_id: schedule.schedule_id},
+            order: [['"candidate_id"', 'ASC']]
+          }).then((candidates) => {
+            // 追加されているかチェック
+            const candidateNames = parseCandidateNames(req);//リクエストから候補日程の配列をパースする関数 parseCandidateNames を呼び出します
+            if(candidateNames) {
+              createCandidatesAndRedirect(candidateNames, schedule.schedule_id, res);
+            } else {
+              res.redirect('/schedules/' + schedule.schedule_id);
+            }
+          });
+        });
+      } else {//edit=1 以外のクエリが渡された際に 400 Bad Request のステータスコードを返す
+        const err = new Error('指定された予定がない、または、編集する権限がありません');
+        err.status = 404;
+        next(err);
+      }
+    });
+  } else if (parseInt(req.query.delete) === 1) {
+    deleteScheduleAggregate(req.params.schedule_id, () => {
+      res.redirect('/');
+    });
+  } else {//予定が見つからない場合や自分自身の予定ではない場合に、 404 Not Found のステータスコード
+    const err = new Error('不正なリクエストです');
+    err.status = 400;
+    next(err);
+  }
+});
+
+// Aggregate:集約, deleteScheduleAggregate特定の親のデータモデルが他のデータモデルを所有
+// test/test.js の deleteScheduleAggregate をほとんど使用
+function deleteScheduleAggregate(scheduleId, done, err) {
+  const promiseCommentDestroy = Comment.findAll({//ここでコメントが削除された Promise オブジェクトを作成
+    where: { schedule_id: scheduleId }
+  }).then((comments) => {//comments.map((c) => { return c.destroy(); });});
+    return Promise.all(comments.map((c) => { return c.destroy(); }));
+  });
+//Promiseのthen関数をうまく利用するために書き換え上下
+  Availability.findAll({//出欠全て取得からの削除
+    where: { schedule_id: scheduleId }
+  }).then((availabilities) => {
+    const promises = availabilities.map((a) => { return a.destroy(); });//子から消していくことでデータベースの処理不都合を防止する
+    return Promise.all(promises);
+  }).then(() => {
+    return Candidate.findAll({//全ての候補が取得できたことの Promise オブジェクトを返し
+      where: { schedule_id: scheduleId }
+    });
+  }).then((candidates) => {//ここで、全ての候補が削除され、かつ、全てのコメントが削除されたことを示す Promise オブジェクトを作成して return 句で返
+    const promises = candidates.map((c) => { return c.destroy(); });
+    promises.push(promiseCommentDestroy);
+    return Promise.all(promises);
+  }).then(() => {//最後の done 関数の実行の部分だけ、予定が削除されたことを受け取った Promise オブジェクトの then 関数にて done 関数を呼ぶように変更
+    return Schedule.findByPk(scheduleId).then((s) => { s.destroy(); });
+  }).then(() => {
+    if(err) return done(err);
+    done();
+  });
+}
+//test/test.js 内でもこの関数を利用できるように
+router.deleteScheduleAggregate = deleteScheduleAggregate;
+
+function createCandidatesAndRedirect(candidateNames, scheduleId, res) {//すでに予定作成にあった実装の切り出しを行った関数
+  const candidates = candidateNames.map((c) => {
+    return {
+      candidateName: c,
+      schedule_id: scheduleId
+    };
+  });
+  Candidate.bulkCreate(candidates).then(() => {
+    res.redirect('/schedules/' + scheduleId);
+  });
+}
+
+function parseCandidateNames(req) {
+  return req.body.candidates.trim().split('\n').map((s) => s.trim()).filter((s) => s !== "");
+}
+/*すでに存在したリクエストから予定名の配列をパースする処理を、 parseCandidateNames という関数名で切り出したもの
+ * 関数は切り出すことによって、他の場所で再利用することができるので
+ */
 
 module.exports = router;

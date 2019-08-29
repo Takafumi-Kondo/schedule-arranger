@@ -8,6 +8,7 @@ const Schedule = require('../models/schedule');
 const Candidate = require('../models/candidate');
 const Availability = require('../models/availability');
 const Comment = require('../models/comment');
+const deleteScheduleAggregate = require('../routes/schedules').deleteScheduleAggregate;
 
 describe('/login', () => {
   before(() => {
@@ -163,42 +164,139 @@ describe('/schedules/:schedule_id/users/:user_id/comments', () => {
     });
   });
 });
-// Aggregate:集約, deleteScheduleAggregate特定の親のデータモデルが他のデータモデルを所有
-function deleteScheduleAggregate(scheduleId, done, err) {
-  const promiseCommentDestroy = Comment.findAll({//ここでコメントが削除された Promise オブジェクトを作成
-    where: { schedule_id: scheduleId }
-  }).then((comments) => {//comments.map((c) => { return c.destroy(); });});
-    return Promise.all(comments.map((c) => { return c.destroy(); }));
+
+describe('/schedules/:schedule_id?edit=1', () => {
+  before(() => {
+    passportStub.install(app);
+    passportStub.login({ id:0, username: 'testuser'});
   });
-//Promiseのthen関数をうまく利用するために書き換え上下
-  Availability.findAll({//出欠全て取得からの削除
-    where: { schedule_id: scheduleId }
-  }).then((availabilities) => {
-    const promises = availabilities.map((a) => { return a.destroy(); });//子から消していくことでデータベースの処理不都合を防止する
-    return Promise.all(promises);
-  }).then(() => {
-    return Candidate.findAll({//全ての候補が取得できたことの Promise オブジェクトを返し
-      where: { schedule_id: scheduleId }
+
+  after(() => {
+    passportStub.logout();
+    passportStub.uninstall(app);
+  });
+
+  it('予定が更新でき、候補が追加できる', (done) => {
+    User.upsert({ user_id: 0, username: 'username'}).then(() => {
+      request(app)
+        .post('/schedules')
+        .send({ schedulename: 'テスト更新予定1', memo: 'テスト更新メモ1', candidates: 'テスト更新候補1' })
+        .end((err, res) => {
+          const createdSchedulePath = res.headers.location;
+          const scheduleId = createdSchedulePath.split('/schedules/')[1];
+          //更新されるかテスト
+          request(app)
+            .post(`/schedules/${scheduleId}?edit=1`)
+            .send({ schedulename: 'テスト更新予定2', memo: 'テスト更新メモ2', candidates: 'テスト更新候補2' })
+            .end((err, res) => {
+              Schedule.findByPk(scheduleId).then((s) => {//予定追加されたか
+                assert.equal(s.schedulename, 'テスト更新予定2');
+                assert.equal(s.memo, 'テスト更新メモ2');
+              });
+              Candidate.findAll({//候補が追加されたか
+                where: { schedule_id: scheduleId },
+                order: [['"candidate_id"', 'ASC']]
+              }).then((candidates) => {
+                assert.equal(candidates.length, 2);
+                assert.equal(candidates[0].candidateName, 'テスト更新候補1');
+                assert.equal(candidates[1].candidateName, 'テスト更新候補2');
+                deleteScheduleAggregate(scheduleId, done, err);
+              });
+            });
+        });
     });
-  }).then((candidates) => {//ここで、全ての候補が削除され、かつ、全てのコメントが削除されたことを示す Promise オブジェクトを作成して return 句で返
-    const promises = candidates.map((c) => { return c.destroy(); });
-    promises.push(promiseCommentDestroy);
-    return Promise.all(promises);
-  }).then(() => {
-    Schedule.findById(scheduleId).then((s) => { s.destroy(); });
-    if(err) return done(err);
-    done();
   });
-    // Promise.all(promises).then(() => {
-    //   Candidate.findAll({
-    //     where: { schedule_id: scheduleId }
-    //   }).then((candidates) => {
-    //     const promises = candidates.map((c) => { return c.destroy(); });//候補
-    //     Promise.all(promises).then(() => {
-    //       Schedule.findById(scheduleId).then((s) => { s.destroy(); });//親予定
-    //       if (err) return done(err);
-    //       done();
-    //     });
-    //   });
-    // });
-}
+});
+
+//function deleteScheduleAggregate 〜〜を削除 routes/schedules.jsのを使えるようにあしてるので
+
+describe('/schedules/:scheduleId?delete=1', () => {
+  before(() => {
+    passportStub.install(app);
+    passportStub.login({ id: 0, username: 'testuser' });
+  });
+
+  after(() => {
+    passportStub.logout();
+    passportStub.uninstall(app);
+  });
+
+  it('予定に関する全ての情報が削除できる', (done) => {
+    User.upsert({ user_id: 0, username: 'testuser' }).then(() => {
+      request(app)
+        .post('/schedules')
+        .send({ schedulename: 'テスト更新予定1', memo: 'テスト更新メモ1', candidates: 'テスト更新候補1' })
+        .end((err, res) => {
+          const createdSchedulePath = res.headers.location;
+          const scheduleId = createdSchedulePath.split('/schedules/')[1];
+
+          //出欠作成
+          const promiseAvailability = Candidate.findOne({
+            where: { schedule_id: scheduleId }
+          }).then((candidate) => {
+            return new Promise((resolve) => {
+              const userId = 0;
+              request(app)
+                .post(`/schedules/${scheduleId}/users/${userId}/candidates/${candidate.candidate_id}`)
+                .send({ availability: 2 })//出席に更新
+                .end((err, res) => {
+                  if (err) done(err);
+                  resolve();
+                });
+            });
+          });
+
+          // コメント作成
+          const promiseComment = new Promise((resolve) => {
+            const userId = 0;
+            request(app)
+              .post(`/schedules/${scheduleId}/users/${userId}/comments`)
+              .send({ comment: 'testcomment' })
+              .expect('{"status":"OK","comment":"testcomment"}')
+              .end((err, res) => {
+                if (err) done(err);
+                resolve();
+              });
+          });
+
+          // 削除
+          const promiseDeleted = Promise.all([promiseAvailability, promiseComment]).then(() => {
+            return new Promise((resolve) => {
+              request(app)
+                .post(`/schedules/${scheduleId}?delete=1`)
+                .end((err, res) => {
+                  if (err) done(err);
+                  resolve();
+                });
+            });
+          });
+
+          // コメント出欠候補予定がデータベース上から削除されている
+          promiseDeleted.then(() => {
+            const p1 = Comment.findAll({
+              where: { schedule_id: scheduleId }
+            }).then((comments) => {
+              assert.equal(comments.length, 0);
+            });
+            const p2 = Availability.findAll({
+              where: { schedule_id: scheduleId }
+            }).then((availabilities) => {
+              assert.equal(availabilities.length, 0);
+            });
+            const p3 = Candidate.findAll({
+              where: { schedule_id: scheduleId }
+            }).then((candidates) => {
+              assert.equal(candidates.length, 0);
+            });
+            const p4 = Schedule.findByPk(scheduleId).then((schedule) => {
+              assert.equal(!schedule, true);
+            });
+            Promise.all([p1, p2, p3, p4]).then(() => {
+              if (err) return done(err);
+              done();
+            });
+          });
+        });
+    });
+  });
+});
