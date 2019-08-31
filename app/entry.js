@@ -1,5 +1,9 @@
 'use strict';
 import $ from 'jquery';
+//Bootstrap が jQueryを利用するためにグローバルオブジェクトの jQuery というプロパティに jQuery を代入
+const global = Function('return this;')();
+global.jQuery = $;
+import bootstrap from 'bootstrap';
 
 $('.availability-toggle-button').each((i, e) => {//クラスavailability-toggle-button要素取得
   const button = $(e);//$(e) で、 ボタン要素の jQuery オブジェクトを取得
@@ -15,6 +19,10 @@ $('.availability-toggle-button').each((i, e) => {//クラスavailability-toggle-
         button.data('availability', data.availability);
         const availabilityLabels = ['欠', '?', '出'];
         button.text(availabilityLabels[data.availability]);
+//ボタンとセルのスタイルを全て取り除き、新たに追加する実装
+        const buttonStyles = ['btn-danger', 'btn-secondary', 'btn-success'];
+        button.removeClass('btn-danger btn-secondary btn-success');
+        button.addClass(buttonStyles[data.availability]);
       });
   });//post〜は、出欠更新の Web API の呼び出しと、実行結果を受け取って button 要素の、 data-* 属性を更新し、ボタンのラベルを更新
 });

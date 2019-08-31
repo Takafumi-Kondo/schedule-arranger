@@ -3,21 +3,21 @@ extends layout
 block content
   h3 予定の編集
   form(method="post", action=`/schedules/${schedule.schedule_id}?edit=1`)
-    div
-      h5 予定名
-      input(type="text" name="schedulename" value=schedule.schedulename)
-    div
-      h5 メモ
-      textarea(name="memo") #{schedule.memo}
-    div
-      label 既存の候補日程
-      ul
+    div.form-group
+      label(for="schedulename") 予定名
+      input(type="text" name="schedulename" value=schedule.schedulename)#schedulename.form-control
+    div.form-group
+      label(for="memo") メモ
+      textarea(name="memo")#memo.form-control #{schedule.memo}
+    div.form-group
+      label 既存の日程候補
+      ul.list-group
         each candidate in candidates
-          li #{candidate.candidateName}
-      p 候補日程の追加 (改行して複数入力)
-      textarea(name="candidates")
+          li.list-group-item #{candidate.candidatename}
+      label(for="candidates").my-2 候補日程の追加 (改行して複数入力してください)
+      textarea(name="candidates")#candidates.form-control
     div
-      button(type="submit") 以上の内容で予定を編集する
-  h3 危険な変更
+      button(type="submit").btn.btn-info 以上の内容で予定を編集する
+  h3.my-3 危険な変更
   form(method="post", action=`/schedules/${schedule.schedule_id}?delete=1`)
-    button(type="submit") この予定を削除する
+    button(type="submit").btn.btn-danger この予定を削除する
